@@ -9,6 +9,7 @@ from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
+from django.db.models import Prefetch
 
 from calls.models import Call, CallResult, Tenant
 
@@ -18,16 +19,35 @@ HISTORY_SIZE = 20
 @require_GET
 def call_context(request: HttpRequest, call_id: uuid.UUID) -> JsonResponse:
     """Everything the runtime needs to start a call: tenant, contact, script and history."""
-    call = get_object_or_404(Call, pk=call_id)
+    # Get the call and its campaign and contact in one query.
+    call = get_object_or_404(
+        Call.objects.select_related('campaign', 'contact'),
+        pk=call_id,
+    )
     owner = call.campaign.ownerships.get()
-    previous_calls = Call.objects.filter(
-        contact=call.contact, status=Call.Status.FINISHED
-    ).order_by('-created_at')[:HISTORY_SIZE]
+
+    # Get all calls at once and save the results in a temporary attribute to avoid N+1 queries.
+    previous_calls = (
+        Call.objects.filter(
+            contact=call.contact,
+            status=Call.Status.FINISHED,
+        )
+        .order_by('-created_at')[:HISTORY_SIZE]
+        .prefetch_related(
+            Prefetch(
+                'results',
+                queryset=CallResult.objects.only('call_id', 'outcome'),
+                to_attr='context_results',
+            )
+        )
+    )
     history = []
     for previous in previous_calls:
-        result = previous.results.first()
-        if result is not None:
-            history.append({'outcome': result.outcome, 'created_at': previous.created_at})
+        if previous.context_results:
+            result = previous.context_results[0]
+            history.append(
+                {'outcome': result.outcome, 'created_at': previous.created_at}
+            )
 
     return JsonResponse(
         {
