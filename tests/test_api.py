@@ -69,3 +69,29 @@ def test_queries_historical_calls(client: Client, call: Call) -> None:
     assert response.status_code == 200
     assert len(response.json()['history']) == 20
     assert len(queries_with_history) <= len(queries_without_history) + 2
+
+def test_same_result_twice_is_only_billed_once(client: Client, call: Call) -> None:
+    payload = {
+        'outcome': 'completed',
+        'duration_s': 95.0,
+        'transcript': 'user: Hello',
+    }
+
+    first_response = client.post(
+        f'/calls/{call.id}/result',
+        payload,
+        content_type='application/json',
+    )
+    second_response = client.post(
+        f'/calls/{call.id}/result',
+        payload,
+        content_type='application/json',
+    )
+
+    tenant = call.campaign.ownerships.get().tenant
+    tenant.refresh_from_db()
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert CallResult.objects.filter(call=call).count() == 1
+    assert tenant.minutes_used == 2
