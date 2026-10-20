@@ -79,6 +79,18 @@ def call_result(request: HttpRequest, call_id: uuid.UUID) -> JsonResponse:
         return JsonResponse({'error': str(exc)}, status=400)
 
     call = get_object_or_404(Call, pk=call_id)
+    existing_result = call.results.first()
+    if existing_result is not None:
+        is_same_result = (
+            existing_result.outcome == payload['outcome']
+            and existing_result.duration_s == payload['duration_s']
+            and existing_result.transcript == payload['transcript']
+        )
+        if is_same_result:
+            return JsonResponse({'status': 'ok'})
+
+        return JsonResponse({'error': 'a different result is already recorded'}, status=409)
+    
     CallResult.objects.create(call=call, **payload)
     call.status = Call.Status.FINISHED
     call.save(update_fields=['status'])
